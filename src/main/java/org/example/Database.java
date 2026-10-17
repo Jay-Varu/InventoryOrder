@@ -5,21 +5,8 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 
-/**
- * Database layer — responsible only for:
- *  1. Providing JDBC connections to SQLite.
- *  2. Creating the schema on first run (CREATE TABLE IF NOT EXISTS).
- *
- * Every connection has:
- *  - foreign_keys = ON  (enforces referential integrity)
- *  - busy_timeout = 5000 ms (threads wait up to 5 s instead of failing instantly)
- *  - journal_mode = WAL  (allows concurrent reads while a write is in progress)
- */
 public class Database {
 
-    // Path to the SQLite file.
-    // Tests set the system property "test.db" to use a separate file, e.g. "test_inventory.db".
-    // Production always uses "database.db" in the working directory.
     private static String getDbUrl() {
         String testDb = System.getProperty("test.db");
         if (testDb != null && !testDb.isBlank()) {
@@ -28,13 +15,9 @@ public class Database {
         return "jdbc:sqlite:database.db";
     }
 
-    /**
-     * Opens and returns a new JDBC connection.
-     * Each thread must call this separately — SQLite connections are NOT thread-safe.
-     */
     public static Connection getConnection() throws SQLException {
         Connection conn = DriverManager.getConnection(getDbUrl());
-        // Apply per-connection settings
+
         try (Statement st = conn.createStatement()) {
             st.execute("PRAGMA foreign_keys = ON");
             st.execute("PRAGMA busy_timeout = 5000");
@@ -43,10 +26,6 @@ public class Database {
         return conn;
     }
 
-    /**
-     * Creates all tables if they do not already exist.
-     * Safe to call every time the program starts.
-     */
     public static void initSchema() throws SQLException {
         try (Connection conn = getConnection();
              Statement st = conn.createStatement()) {

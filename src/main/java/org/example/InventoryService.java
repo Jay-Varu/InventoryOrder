@@ -13,14 +13,6 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Business logic layer — all inventory rules live here.
- * This class has NO knowledge of how commands were typed; it only works with
- * Java types and throws exceptions for error conditions.
- *
- * Main.java calls these methods and formats the output.
- * The simulate() method calls placeOrder() — the same method used by the CLI.
- */
 public class InventoryService {
 
     private static final DateTimeFormatter TIMESTAMP_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
@@ -29,16 +21,6 @@ public class InventoryService {
     // ADD PRODUCT
     // -------------------------------------------------------------------------
 
-    /**
-     * Adds a new product, or increases its stock if the SKU already exists.
-     *
-     * @param sku    product identifier (case-sensitive)
-     * @param name   human-readable product name
-     * @param price  price in whole paise (must be > 0)
-     * @param stock  units to add (must be > 0)
-     * @throws IllegalArgumentException for invalid inputs
-     * @throws SQLException             for database errors
-     */
     public void addProduct(String sku, String name, long price, int stock)
             throws IllegalArgumentException, SQLException {
 
@@ -87,22 +69,8 @@ public class InventoryService {
     // PLACE ORDER
     // -------------------------------------------------------------------------
 
-    /**
-     * Represents one line in an order request (input-only, before DB insert).
-     */
     public record OrderRequest(String sku, int quantity) {}
 
-    /**
-     * Places an order atomically. Either ALL lines are fulfilled, or NONE are.
-     * Uses BEGIN IMMEDIATE to acquire a write lock before reading stock values,
-     * preventing the race condition where two threads both see sufficient stock.
-     *
-     * @param customer the customer name
-     * @param lines    list of (sku, quantity) pairs — 1 to 5 items
-     * @return the created Order
-     * @throws IllegalArgumentException if input is invalid or stock is insufficient
-     * @throws SQLException             for database errors
-     */
     public Order placeOrder(String customer, List<OrderRequest> lines)
             throws IllegalArgumentException, SQLException {
 
@@ -120,13 +88,8 @@ public class InventoryService {
         }
 
         try (Connection conn = Database.getConnection()) {
-            // Disable auto-commit so we can control the transaction manually
-            conn.setAutoCommit(false);
-
+            
             try {
-                // BEGIN IMMEDIATE acquires a write lock NOW, before any reads.
-                // This prevents two threads from both reading sufficient stock
-                // and both proceeding to decrement it.
                 try (Statement st = conn.createStatement()) {
                     st.execute("BEGIN IMMEDIATE");
                 }
@@ -196,12 +159,16 @@ public class InventoryService {
                     }
                 }
 
-                conn.commit();
+                try (Statement st = conn.createStatement()) {
+                    st.execute("COMMIT");
+                }
                 return new Order(orderId, customer, createdAt, "PLACED", total);
 
             } catch (Exception e) {
                 // Roll back every change if anything went wrong
-                try { conn.rollback(); } catch (SQLException ignored) {}
+                try (Statement st = conn.createStatement()) {
+                    st.execute("ROLLBACK");
+                } catch (SQLException ignored) {}
                 if (e instanceof IllegalArgumentException iae) throw iae;
                 throw new SQLException("Order failed: " + e.getMessage(), e);
             }
@@ -225,9 +192,9 @@ public class InventoryService {
             throw new IllegalArgumentException("Order ID must be a positive integer");
 
         try (Connection conn = Database.getConnection()) {
-            conn.setAutoCommit(false);
-
+            // Keep autoCommit=true (default) and manage the transaction manually with SQL.
             try {
+                // Acquire write lock before any reads.
                 try (Statement st = conn.createStatement()) {
                     st.execute("BEGIN IMMEDIATE");
                 }
@@ -276,11 +243,15 @@ public class InventoryService {
                     }
                 }
 
-                conn.commit();
+                try (Statement st = conn.createStatement()) {
+                    st.execute("COMMIT");
+                }
                 System.out.printf("Order %d cancelled and stock restored.%n", orderId);
 
             } catch (Exception e) {
-                try { conn.rollback(); } catch (SQLException ignored) {}
+                try (Statement st = conn.createStatement()) {
+                    st.execute("ROLLBACK");
+                } catch (SQLException ignored) {}
                 if (e instanceof IllegalArgumentException iae) throw iae;
                 throw new SQLException("Cancel failed: " + e.getMessage(), e);
             }
@@ -291,14 +262,6 @@ public class InventoryService {
     // LOW STOCK
     // -------------------------------------------------------------------------
 
-    /**
-     * Returns all products with stock strictly below the given threshold,
-     * sorted by stock ascending (lowest stock first).
-     *
-     * @param below stock threshold (exclusive). Default is 5.
-     * @return list of products with low stock
-     * @throws SQLException for database errors
-     */
     public List<Product> lowStock(int below) throws SQLException {
         if (below <= 0)
             throw new IllegalArgumentException("--below value must be greater than 0");
@@ -344,7 +307,7 @@ public class InventoryService {
 
         // --- Setup: insert P1 fresh (or reset if it already exists) ---
         try (Connection conn = Database.getConnection()) {
-            conn.setAutoCommit(false);
+            // Keep autoCommit=true; manage the transaction entirely via SQL.
             try (Statement st = conn.createStatement()) {
                 st.execute("BEGIN IMMEDIATE");
             }
@@ -375,9 +338,13 @@ public class InventoryService {
                     ps.setInt(4, INITIAL_STOCK);
                     ps.executeUpdate();
                 }
-                conn.commit();
+                try (Statement st = conn.createStatement()) {
+                    st.execute("COMMIT");
+                }
             } catch (Exception e) {
-                conn.rollback();
+                try (Statement st = conn.createStatement()) {
+                    st.execute("ROLLBACK");
+                } catch (SQLException ignored) {}
                 throw new SQLException("Simulate setup failed: " + e.getMessage(), e);
             }
         }
